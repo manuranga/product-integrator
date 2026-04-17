@@ -1,0 +1,42 @@
+name: Build and Smoke (no publish)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ballerina_version:
+        description: 'Ballerina version'
+        required: true
+        default: '2201.13.3-alpha3'
+        type: string
+      icp_version:
+        description: 'ICP version'
+        required: true
+        default: '2.0.0-alpha6'
+        type: string
+      integrator_version:
+        description: 'Integrator version'
+        required: true
+        default: '5.0.0-alpha6'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    uses: ./.github/workflows/compile.yml
+    secrets: inherit
+    with:
+      runOnAWS: false
+      ballerina_version: ${{ inputs.ballerina_version }}
+      ballerina_extension_source: marketplace
+      ballerina_extension_version: ''
+      icp_version: ${{ inputs.icp_version }}
+      integrator_version: ${{ inputs.integrator_version }}
+      build_packed_installers: true
+
+  smoke-test:
+    needs: compile
+    uses: ./.github/workflows/smoke-test.yml
+    with:
+      artifact_name: Product-Integrator-TAR
