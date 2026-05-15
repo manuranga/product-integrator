@@ -136,6 +136,19 @@ jobs:
           rm -f "$DB_DIR/.wso2ipw-write-test"
           sudo rm -f "$DB_DIR/.wso2ipw-sudo-write-test"
 
+      - name: Apply candidate ICP permission fix
+        if: matrix.example == 'icp'
+        run: |
+          ROOT=$(dirname "$WSO2_INTEGRATOR_PATH")
+          ICP_DIR="$ROOT/components/icp"
+          DB_DIR="$ICP_DIR/bin/database"
+          sudo chmod -R a+rwX "$DB_DIR"
+          sudo chmod -R a+rwX "$ICP_DIR/logs"
+          sudo chmod a+rw "$ICP_DIR/www/config.json"
+          getfacl -p "$DB_DIR" "$DB_DIR"/* "$ICP_DIR/logs" "$ICP_DIR/www/config.json"
+          touch "$DB_DIR/.wso2ipw-write-test"
+          rm "$DB_DIR/.wso2ipw-write-test"
+
       - name: Patch ICP script for dash compatibility
         if: matrix.example == 'icp'
         run: |
