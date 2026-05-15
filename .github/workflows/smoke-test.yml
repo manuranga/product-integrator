@@ -121,14 +121,20 @@ jobs:
           echo "WSO2_INTEGRATOR_PATH=$WSO2_INTEGRATOR_PATH"
           echo "ROOT=$ROOT"
           id
+          sysctl fs.protected_regular fs.protected_fifos || true
+          stat -f -c 'mount=%m type=%T flags=%X' "$DB_DIR" || true
           namei -l "$DB_DIR" || true
           find "$ICP_DIR" -maxdepth 3 \( -path "$DB_DIR" -o -path "$DB_DIR/*" -o -path "$ICP_DIR/logs" -o -path "$ICP_DIR/www/config.json" \) \
-            -printf '%M %u %g %p\n' | sort
+            -printf '%m %M %u %g %p\n' | sort
+          command -v getfacl && getfacl -p "$DB_DIR" "$DB_DIR"/* "$ICP_DIR/logs" "$ICP_DIR/www/config.json" || true
+          command -v lsattr && lsattr -d "$DB_DIR" "$DB_DIR"/* "$ICP_DIR/logs" "$ICP_DIR/www/config.json" || true
           test -w "$DB_DIR" && echo "DB dir writable" || echo "DB dir NOT writable"
           test -w "$DB_DIR/icp_db.mv.db" && echo "icp_db writable" || echo "icp_db NOT writable"
           test -w "$DB_DIR/credentials_db.mv.db" && echo "credentials_db writable" || echo "credentials_db NOT writable"
-          touch "$DB_DIR/.wso2ipw-write-test"
-          rm "$DB_DIR/.wso2ipw-write-test"
+          touch "$DB_DIR/.wso2ipw-write-test" && echo "runner touch ok" || echo "runner touch failed"
+          sudo touch "$DB_DIR/.wso2ipw-sudo-write-test" && echo "sudo touch ok" || echo "sudo touch failed"
+          rm -f "$DB_DIR/.wso2ipw-write-test"
+          sudo rm -f "$DB_DIR/.wso2ipw-sudo-write-test"
 
       - name: Patch ICP script for dash compatibility
         if: matrix.example == 'icp'
