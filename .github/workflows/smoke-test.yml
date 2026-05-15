@@ -19,13 +19,22 @@ on:
         description: 'Download from GitHub Release (e.g. 5.0.0-alpha14)'
         required: false
         type: string
+      upstream_run_id:
+        description: 'Download Linux DEB from upstream workflow run ID'
+        required: false
+        type: string
+      upstream_artifact_name:
+        description: 'Upstream Linux DEB artifact name'
+        required: false
+        type: string
+        default: 'Product-Integrator-DEB'
 
 permissions:
   contents: read
 
 jobs:
   linux:
-    if: inputs.artifact_name != '' || inputs.integrator_version != ''
+    if: inputs.artifact_name != '' || inputs.integrator_version != '' || inputs.upstream_run_id != ''
     name: ${{ matrix.example }} (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -57,8 +66,18 @@ jobs:
           name: ${{ inputs.artifact_name }}
           path: artifact/
 
+      - name: Download upstream build artifact
+        if: inputs.upstream_run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ inputs.upstream_run_id }}" \
+            --repo wso2/product-integrator \
+            --name "${{ inputs.upstream_artifact_name }}" \
+            --dir artifact
+
       - name: Download from GitHub Release
-        if: inputs.integrator_version != '' && inputs.artifact_name == ''
+        if: inputs.integrator_version != '' && inputs.artifact_name == '' && inputs.upstream_run_id == ''
         run: |
           VERSION="${{ inputs.integrator_version }}"
           curl -fsSL "https://api.github.com/repos/wso2/product-integrator/releases/tags/v${VERSION}" -o release.json
@@ -92,6 +111,24 @@ jobs:
           done
           echo "wso2-integrator payload binary not found under /usr/share/wso2-integrator or /opt/wso2-integrator" >&2
           exit 1
+
+      - name: Diagnose ICP install permissions
+        if: matrix.example == 'icp'
+        run: |
+          ROOT=$(dirname "$WSO2_INTEGRATOR_PATH")
+          ICP_DIR="$ROOT/components/icp"
+          DB_DIR="$ICP_DIR/bin/database"
+          echo "WSO2_INTEGRATOR_PATH=$WSO2_INTEGRATOR_PATH"
+          echo "ROOT=$ROOT"
+          id
+          namei -l "$DB_DIR" || true
+          find "$ICP_DIR" -maxdepth 3 \( -path "$DB_DIR" -o -path "$DB_DIR/*" -o -path "$ICP_DIR/logs" -o -path "$ICP_DIR/www/config.json" \) \
+            -printf '%M %u %g %p\n' | sort
+          test -w "$DB_DIR" && echo "DB dir writable" || echo "DB dir NOT writable"
+          test -w "$DB_DIR/icp_db.mv.db" && echo "icp_db writable" || echo "icp_db NOT writable"
+          test -w "$DB_DIR/credentials_db.mv.db" && echo "credentials_db writable" || echo "credentials_db NOT writable"
+          touch "$DB_DIR/.wso2ipw-write-test"
+          rm "$DB_DIR/.wso2ipw-write-test"
 
       - name: Patch ICP script for dash compatibility
         if: matrix.example == 'icp'
