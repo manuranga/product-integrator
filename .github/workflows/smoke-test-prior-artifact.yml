@@ -1,0 +1,148 @@
+name: Smoke Test Prior Artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_repository:
+        description: 'Repository that owns the source run'
+        required: true
+        default: 'wso2/product-integrator'
+      artifact_run_id:
+        description: 'Source workflow run ID'
+        required: true
+        default: '27492680926'
+      artifact_name:
+        description: 'Linux DEB artifact name'
+        required: true
+        default: 'Product-Integrator-DEB'
+      wso2ipw_package:
+        description: 'npm install spec for wso2ipw'
+        required: true
+        default: 'https://github.com/manuranga/wso2ipw/archive/refs/tags/v0.1.10.tar.gz'
+      example:
+        description: 'Example to run'
+        required: true
+        default: 'icp'
+        type: choice
+        options:
+          - icp
+          - hello-world-service
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  DISPLAY: ':99'
+
+jobs:
+  linux:
+    name: ${{ inputs.example }} from prior artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            xvfb \
+            libgtk-3-0 libgbm1 libnss3 libxss1 libasound2t64 \
+            libx11-xcb1 libdrm2 libxcomposite1 libxdamage1 \
+            libxrandr2 libatk-bridge2.0-0 libatspi2.0-0 libcups2
+
+      - name: Start Xvfb
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 2
+
+      - name: Download prior build artifact
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ inputs.source_repository }}
+          run-id: ${{ inputs.artifact_run_id }}
+          name: ${{ inputs.artifact_name }}
+          path: artifact/
+          github-token: ${{ github.token }}
+
+      - name: Install DEB and locate binary
+        run: |
+          find artifact -maxdepth 2 -type f -print
+          sudo apt-get install -y ./artifact/*.deb
+          for ROOT in /usr/share/wso2-integrator /opt/wso2-integrator; do
+            BINARY="$ROOT/wso2-integrator"
+            if [ -x "$BINARY" ] && [ -d "$ROOT/components" ]; then
+              echo "WSO2_INTEGRATOR_PATH=$(realpath "$BINARY")" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "wso2-integrator payload binary not found under /usr/share/wso2-integrator or /opt/wso2-integrator" >&2
+          exit 1
+
+      - name: Patch ICP script for dash compatibility
+        if: inputs.example == 'icp'
+        run: |
+          ICP_SH=$(dirname "$WSO2_INTEGRATOR_PATH")/components/icp/bin/icp.sh
+          if [ -f "$ICP_SH" ]; then
+            sudo python3 - "$ICP_SH" <<'PYEOF'
+          import re, sys
+          path = sys.argv[1]
+          with open(path) as f: s = f.read()
+          s = s.replace('JAVA_OPTS=()', 'JAVA_OPTS=""')
+          s = re.sub(r'JAVA_OPTS\+=\(\s*\n((?:\s+.*\n)*?\s*)\)',
+              lambda m: 'JAVA_OPTS="$JAVA_OPTS ' + ' '.join(m.group(1).split()) + '"', s)
+          s = s.replace('"${JAVA_OPTS[@]}"', '$JAVA_OPTS')
+          with open(path, 'w') as f: f.write(s)
+          print('Patched', path)
+          PYEOF
+          fi
+
+      - name: Pre-pull ICP Ballerina modules
+        if: inputs.example == 'icp'
+        run: |
+          BAL=$(dirname "$WSO2_INTEGRATOR_PATH")/components/ballerina/bin/bal
+          export JAVA_HOME=$(find $(dirname "$WSO2_INTEGRATOR_PATH")/components/dependencies -maxdepth 1 -name 'jdk-*' -type d | head -1)
+          "$BAL" pull ballerinax/metrics.logs
+          "$BAL" pull wso2/icp.runtime.bridge
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install wso2ipw
+        run: npm install -g "${{ inputs.wso2ipw_package }}"
+
+      - name: Install playwright-cli and Chrome
+        if: inputs.example == 'icp'
+        run: |
+          npm install -g @playwright/cli
+          cd $(npm root -g)/@playwright/cli/node_modules/playwright-core && npx playwright install --with-deps chrome
+
+      - name: Create playwright-cli config
+        if: inputs.example == 'icp'
+        run: |
+          mkdir -p .playwright
+          echo '{"browser":{"contextOptions":{"ignoreHTTPSErrors":true}}}' > .playwright/cli.config.json
+
+      - name: Run ${{ inputs.example }}
+        env:
+          WSO2IPW_ELECTRON_ARGS: ${{ inputs.example == 'icp' && '--no-sandbox --password-store=basic' || '--no-sandbox' }}
+        run: bash "$(npm root -g)/wso2ipw/examples/${{ inputs.example }}/run-all.sh"
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prior-artifact-smoke-logs-${{ inputs.example }}
+          path: |
+            /home/runner/.wso2ipw/*/daemon.log
+            /home/runner/.wso2ipw/*/daemon.err
+          if-no-files-found: ignore
+
+      - name: Upload screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prior-artifact-smoke-screenshots-${{ inputs.example }}
+          path: '*.png'
+          if-no-files-found: ignore
