@@ -7,10 +7,6 @@ on:
         description: 'Repository that owns the source run'
         required: true
         default: 'wso2/product-integrator'
-      artifact_run_id:
-        description: 'Source workflow run ID'
-        required: true
-        default: '27492680926'
       artifact_name:
         description: 'Linux DEB artifact name'
         required: true
@@ -55,11 +51,51 @@ jobs:
           Xvfb :99 -screen 0 1920x1080x24 &
           sleep 2
 
+      - name: Resolve latest build artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          ARTIFACT_NAME: ${{ inputs.artifact_name }}
+        run: |
+          gh api --method GET "repos/${SOURCE_REPOSITORY}/actions/artifacts" \
+            -f name="${ARTIFACT_NAME}" \
+            -F per_page=100 > artifacts.json
+
+          python3 <<'PY'
+          import json
+          import os
+          import sys
+
+          artifact_name = os.environ['ARTIFACT_NAME']
+          with open('artifacts.json') as f:
+              artifacts = json.load(f).get('artifacts', [])
+
+          artifacts = [a for a in artifacts if a.get('name') == artifact_name and not a.get('expired')]
+          artifacts.sort(key=lambda a: a.get('created_at', ''), reverse=True)
+          if not artifacts:
+              print(f"No non-expired artifact named {artifact_name!r} found", file=sys.stderr)
+              sys.exit(1)
+
+          artifact = artifacts[0]
+          run_id = artifact.get('workflow_run', {}).get('id')
+          if not run_id:
+              print(f"Artifact has no workflow_run.id: {artifact}", file=sys.stderr)
+              sys.exit(1)
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              print(f"run_id={run_id}", file=out)
+              print(f"artifact_id={artifact['id']}", file=out)
+              print(f"artifact_created_at={artifact['created_at']}", file=out)
+
+          print(f"Using artifact {artifact['id']} from run {run_id}, created at {artifact['created_at']}")
+          PY
+
       - name: Download prior build artifact
         uses: actions/download-artifact@v4
         with:
           repository: ${{ inputs.source_repository }}
-          run-id: ${{ inputs.artifact_run_id }}
+          run-id: ${{ steps.artifact.outputs.run_id }}
           name: ${{ inputs.artifact_name }}
           path: artifact/
           github-token: ${{ github.token }}
